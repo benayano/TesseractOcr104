@@ -1,24 +1,25 @@
 package com.example.tesseractocr104
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
-import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.googlecode.tesseract.android.TessBaseAPI
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
@@ -43,8 +44,10 @@ class MainActivity : AppCompatActivity() {
     // Given path must contain subdirectory `tessdata` where are `*.traineddata` language files
     private val tvFirst: TextView by lazy { findViewById(R.id.tvFirst) }
     private val ivMain: ImageView by lazy { findViewById(R.id.ivMain) }
-    private val capture: Button by lazy { findViewById(R.id.capture) }
-    private val fraLanguageFile: String = "tessdata/fra.traineddata"
+    private val btnExtract: Button by lazy { findViewById(R.id.btnExtract) }
+    private val btnGetCamera: Button by lazy { findViewById(R.id.btnGetCamera) }
+    private val fraLanguageFile: String = "tessdata/eng.traineddata"
+
 
     private lateinit var dataPath: String
     private val trainData = "tesseract/tessdata"
@@ -53,20 +56,22 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-
-        // dataPath = this.externalCacheDir!!.absolutePath//.toString()
         dataPath = this.getExternalFilesDir("/")!!.path + "/"
 
-        val drawable: Drawable = ivMain.drawable
-        val bitmap: Bitmap = drawable.toBitmap(config = Bitmap.Config.ARGB_8888)
+        val bitmap: Bitmap = bitmapFromImageView(ivMain)
 
-        val uri:Uri = Uri.parse("android.resource://com.example.tesseractocr104/" + R.drawable.test_for_ocr.toString())
-
-        capture.setOnClickListener {
+        btnExtract.setOnClickListener {
             if (permissionCameraGranted()) {
-
-                 prepareTessData(bitmap)
-              //  prepareTessData(uri)
+                prepareTessData(bitmap)
+            } else {
+                Toast.makeText(this, " אין הרשאת גישה למצלמה ויותר מזה!!!", Toast.LENGTH_LONG)
+                    .show()
+                requestCameraPermission()
+            }
+        }
+        btnGetCamera.setOnClickListener {
+            if (permissionCameraGranted()) {
+               getCamera()
             } else {
                 Toast.makeText(this, " אין הרשאת גישה למצלמה ויותר מזה!!!", Toast.LENGTH_LONG)
                     .show()
@@ -74,7 +79,30 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    }
 
+    private fun bitmapFromImageView(imageView: ImageView): Bitmap {
+        val drawable: Drawable = imageView.drawable
+        return drawable.toBitmap(config = Bitmap.Config.ARGB_8888)
+    }
+
+    private fun getCamera() {
+        val cameraInt = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        getResult.launch(cameraInt)
+    }
+    private val getResult =
+        registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) {
+            if (it.resultCode == Activity.RESULT_OK) {
+                changeImage(it.data)
+            }
+        }
+    @OptIn(DelicateCoroutinesApi::class)
+    private fun changeImage(data: Intent?) {
+        val images: Bitmap = data?.extras?.get("data") as Bitmap
+            ivMain.setImageBitmap(images)
+            getTranslate(bitmapFromImageView(ivMain))
     }
 
     private fun requestCameraPermission() {
@@ -99,13 +127,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getTranslate(bitmap: Bitmap) {
-        tvFirst.text = dataPath
         tess.setImage(bitmap)
-        Log.d("MainActivity", "pathToDataFile is $dataPath")
         try {
-            tess.init(dataPath , "eng")
+            tess.init(dataPath, "eng")
             Log.d("MainActivity", "init Tesseract  is Successful!!!! ")
-            tvFirst.text = tess.utF8Text
+            CoroutineScope(Dispatchers.Unconfined).launch {
+                launch {
+                    tvFirst.text = tess.utF8Text
+                    Log.d("tag", "this is Coroutins")
+                }
+
+            }
 
         } catch (e: Exception) {
             Log.e("MainActivity", "$e")
@@ -118,7 +150,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun prepareTessData(bitmap: Bitmap) {
         try {
-           // val dir = getExternalFilesDir(TESS_DATA)
             val dir = getExternalFilesDir("/")
             if (!dir!!.exists()) {
                 if (!dir.mkdir()) {
@@ -129,7 +160,7 @@ class MainActivity : AppCompatActivity() {
                     ).show()
                 }
             }
-            Log.d("tag","the path of dir is ${dir.path}")
+            Log.d("tag", "the path of dir is ${dir.path}")
 
             val fileList = assets.list("")
             Log.d("tag", "0000000\n\n\nthe list file asset  is: \n ${fileList?.toList()}")
@@ -143,16 +174,16 @@ class MainActivity : AppCompatActivity() {
                     if (File(pathToDataFile).exists()) {
                         Log.d("tag", "file is exists!!!")
                         val inputStream = assets.open(fraLanguageFile)
-                        // val input =this.resources.assets.open("fra.traineddata")
-                        Log.d("tag", "input stream is: ${inputStream}")
-                        val outputStream: OutputStream = FileOutputStream("${pathToDataFile}/eng.traineddata")
-                        Log.d("tag", "outputStream is: ${outputStream}")
+                        Log.d("tag", "input stream is: $inputStream")
+                        val outputStream: OutputStream =
+                            FileOutputStream("${pathToDataFile}/eng.traineddata")
+                        Log.d("tag", "outputStream is: $outputStream")
                         val buffer = ByteArray(1024)
                         var read: Int
                         while (inputStream.read(buffer).also { read = it } != -1) {
                             outputStream.write(buffer, 0, read)
                         }
-                       getTranslate(bitmap)
+                        getTranslate(bitmap)
                         inputStream.close()
                         outputStream.close()
                         Log.d("tag", "222222222222222222222222222")
@@ -164,7 +195,6 @@ class MainActivity : AppCompatActivity() {
             Log.e("tag", "ERROR\n\nfile is not valid ${e.message!!}")
         }
     }
-
 
 
 }
