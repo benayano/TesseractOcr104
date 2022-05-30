@@ -9,6 +9,8 @@ import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
+import android.view.Menu
+import android.view.MenuItem
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.TextView
@@ -19,7 +21,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.googlecode.tesseract.android.TessBaseAPI
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
@@ -33,21 +37,44 @@ class MainActivity : AppCompatActivity() {
         Manifest.permission.READ_EXTERNAL_STORAGE
     )
 
+    private var hebrew = false
+    private var english = false
+    private var french = false
+    private var lasteLanguag: String = "eng"
+
+    private fun languageIsInitialized(language: String): Boolean {
+        return when (language) {
+            "eng" -> english
+            "fra" -> french
+            "heb" -> hebrew
+            else -> {false}
+        }
+    }
+
+    private fun initializedLanguage(language: String) {
+        when (language) {
+            "eng" -> english = true
+            "fra" -> french = true
+            "heb" -> hebrew = true
+            //else -> {}
+        }
+    }
+
     companion object {
         private const val CAMERA_REQUEST_ID = 10
-        private const val TESS_DATA = "/tessdata"
     }
 
 
     private val tess = TessBaseAPI()
 
-    // Given path must contain subdirectory `tessdata` where are `*.traineddata` language files
     private val tvFirst: TextView by lazy { findViewById(R.id.tvFirst) }
     private val ivMain: ImageView by lazy { findViewById(R.id.ivMain) }
     private val btnExtract: Button by lazy { findViewById(R.id.btnExtract) }
     private val btnGetCamera: Button by lazy { findViewById(R.id.btnGetCamera) }
-    private val fraLanguageFile: String = "tessdata/eng.traineddata"
+    private val engLanguageFile: String = "tessdata/eng.traineddata"
 
+
+    private fun saveLanguage(language: String) = "tessdata/$language.traineddata"
 
     private lateinit var dataPath: String
     private val trainData = "tesseract/tessdata"
@@ -71,7 +98,7 @@ class MainActivity : AppCompatActivity() {
         }
         btnGetCamera.setOnClickListener {
             if (permissionCameraGranted()) {
-               getCamera()
+                getCamera()
             } else {
                 Toast.makeText(this, " אין הרשאת גישה למצלמה ויותר מזה!!!", Toast.LENGTH_LONG)
                     .show()
@@ -79,6 +106,31 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu?): Boolean {
+        menuInflater.inflate(R.menu.menu_language, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.menIdHebrew -> {
+                lasteLanguag = "heb"
+                return true
+            }
+            R.id.menIdEnglish -> {
+                lasteLanguag = "eng"
+                return true
+            }
+            R.id.menIdFrench -> {
+                lasteLanguag = "fra"
+                return true
+            }
+            else -> {
+                return true
+            }
+        }
     }
 
     private fun bitmapFromImageView(imageView: ImageView): Bitmap {
@@ -90,6 +142,7 @@ class MainActivity : AppCompatActivity() {
         val cameraInt = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
         getResult.launch(cameraInt)
     }
+
     private val getResult =
         registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
@@ -98,11 +151,16 @@ class MainActivity : AppCompatActivity() {
                 changeImage(it.data)
             }
         }
-    @OptIn(DelicateCoroutinesApi::class)
+
     private fun changeImage(data: Intent?) {
         val images: Bitmap = data?.extras?.get("data") as Bitmap
-            ivMain.setImageBitmap(images)
-            getTranslate(bitmapFromImageView(ivMain))
+        ivMain.setImageBitmap(images)
+        if (!languageIsInitialized(lasteLanguag)) {
+            prepareTessData(bitmapFromImageView(ivMain), language = lasteLanguag)
+            initializedLanguage(lasteLanguag)
+        } else {
+            startOcr(bitmapFromImageView(ivMain), language = lasteLanguag)
+        }
     }
 
     private fun requestCameraPermission() {
@@ -126,41 +184,24 @@ class MainActivity : AppCompatActivity() {
                 PackageManager.PERMISSION_GRANTED
     }
 
-    private fun getTranslate(bitmap: Bitmap) {
+    private fun startOcr(bitmap: Bitmap, language: String = "eng") {
         tess.setImage(bitmap)
         try {
-            tess.init(dataPath, "eng")
-            Log.d("MainActivity", "init Tesseract  is Successful!!!! ")
+            tess.init(dataPath, language)
             CoroutineScope(Dispatchers.Unconfined).launch {
-                launch {
-                    tvFirst.text = tess.utF8Text
-                    Log.d("tag", "this is Coroutins")
-                }
-
+                tvFirst.text = tess.utF8Text
             }
-
         } catch (e: Exception) {
             Log.e("MainActivity", "$e")
         }
-        Log.d("MainActivity", "${bitmap.config}")
         Log.d("MainActivity", "image text is : ${tess.utF8Text}")
-
         tess.clear()
     }
 
-    private fun prepareTessData(bitmap: Bitmap) {
+    private fun prepareTessData(bitmap: Bitmap, language: String = "eng") {
         try {
             val dir = getExternalFilesDir("/")
-            if (!dir!!.exists()) {
-                if (!dir.mkdir()) {
-                    Toast.makeText(
-                        applicationContext,
-                        "The folder " + dir.path + "was not created",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            }
-            Log.d("tag", "the path of dir is ${dir.path}")
+            checkDirExist(dir)
 
             val fileList = assets.list("")
             Log.d("tag", "0000000\n\n\nthe list file asset  is: \n ${fileList?.toList()}")
@@ -173,26 +214,38 @@ class MainActivity : AppCompatActivity() {
                     Log.d("tag", " pathToDataFile is : $pathToDataFile")
                     if (File(pathToDataFile).exists()) {
                         Log.d("tag", "file is exists!!!")
-                        val inputStream = assets.open(fraLanguageFile)
+                        val inputStream = assets.open(saveLanguage(language))
                         Log.d("tag", "input stream is: $inputStream")
                         val outputStream: OutputStream =
-                            FileOutputStream("${pathToDataFile}/eng.traineddata")
+                            FileOutputStream("${pathToDataFile}/$language.traineddata")
                         Log.d("tag", "outputStream is: $outputStream")
                         val buffer = ByteArray(1024)
                         var read: Int
                         while (inputStream.read(buffer).also { read = it } != -1) {
                             outputStream.write(buffer, 0, read)
                         }
-                        getTranslate(bitmap)
+                        startOcr(bitmap, language = language)
                         inputStream.close()
                         outputStream.close()
-                        Log.d("tag", "222222222222222222222222222")
                     }
                 }
             }
-
         } catch (e: java.lang.Exception) {
             Log.e("tag", "ERROR\n\nfile is not valid ${e.message!!}")
+        }
+    }
+
+    private fun checkDirExist(dir: File?) {
+        if (!dir!!.exists()) {
+            if (!dir.mkdir()) {
+                Toast.makeText(
+                    applicationContext,
+                    "The folder " + dir.path + "was not created",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } else {
+                Log.d("tag", "the path of dir is ${dir.path}")
+            }
         }
     }
 
