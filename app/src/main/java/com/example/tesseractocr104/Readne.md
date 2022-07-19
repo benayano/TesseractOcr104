@@ -1,0 +1,1 @@
+this is test for ocr in three languages 
